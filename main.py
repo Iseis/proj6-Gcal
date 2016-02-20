@@ -187,10 +187,19 @@ def setrange():
     flask.flash("Setrange gave us '{}'".format(
       request.form.get('daterange')))
     daterange = request.form.get('daterange')
+    start_time = request.form.get('start')
+    end_time = request.form.get('end')
+    app.logger.debug(start_time)
+    app.logger.debug(end_time)
+
     flask.session['daterange'] = daterange
+    flask.session['pick_start'] = start_time
+    flask.session['pick_final'] = end_time
     daterange_parts = daterange.split()
     flask.session['begin_date'] = interpret_date(daterange_parts[0])
     flask.session['end_date'] = interpret_date(daterange_parts[2])
+    flask.session['start_time'] = interpret_time(start_time)
+    flask.session['end_time'] = interpret_time(end_time)
     app.logger.debug("Setrange parsed {} - {}  dates as {} - {}".format(
       daterange_parts[0], daterange_parts[1], 
       flask.session['begin_date'], flask.session['end_date']))
@@ -299,6 +308,72 @@ def list_calendars(service):
             })
     return sorted(result, key=cal_sort_key)
 
+#####
+#
+# Find conflicts with selected time and date and the cals selected
+#
+#####
+@app.route('/conflicts')
+def find_conflicts():
+    app.logger.debug("Entering find_conflicts")
+    credentials = client.OAuth2Credentials.from_json(flask.session['credentials'])
+    service = get_gcal_service(credentials)
+    cals = request.args.get('cals', type=str)
+    app.logger.debug(cals)
+    split_cals = cals.split()
+    final_events = []
+    #go through each cal that was selected and check busy times
+    for cal in split_cals:
+        events = service.events().list(calendarId=cal,  pageToken=None).execute()
+        print(events)
+        #for each event within the current calendar
+        for event in events['items']:
+            #if the event is set to transparent skip it
+            if 'transparancy' in event:
+                continue
+            start_time_date = arrow.get(event['start']['dateTime'])
+            end_time_date = arrow.get(event['end']['dateTime'])
+
+            if is_conflict(start_time_date, end_time_date):
+                start = start_time_date.to('local').format('MM/DD/YYYY h:mm')
+                end = end_time_date.to('local').format('MM/DD/YYYY h:mm')
+                app.logger.debug(start)
+                final_events.append({
+                    "start": start,
+                    "end": end,
+                    "sum": event['summary']
+                })
+
+    flask.session['final'] = final_events
+    return "none"
+
+
+def is_conflict(start, end):
+        devent_start_end = [ start.date(), end.date()]
+        tevent_start_end = [ start.time(), end.time()]
+        dselected_start_end = [ arrow.get(flask.session['begin_date']).date(), arrow.get(flask.session['end_date']).date()]
+        tselected_start_end = [ arrow.get(flask.session['start_time']).time(), arrow.get(flask.session['end_time']).time()]
+        app.logger.debug(dselected_start_end)
+        app.logger.debug(tselected_start_end)
+        app.logger.debug(devent_start_end)
+        app.logger.debug(tevent_start_end)
+
+        #if the date falls between start and dates picked and during event return true
+        if not (dselected_start_end[0] <= devent_start_end[0] <= dselected_start_end[1]) or not (dselected_start_end[0] <= devent_start_end[1] <= dselected_start_end[1]):
+            app.logger.debug("'{}' <= '{}' <= '{}'".format(dselected_start_end[0], devent_start_end[0], dselected_start_end[1]))
+            return False
+        elif tevent_start_end[1] <= tselected_start_end[0]:
+            app.logger.debug("Hello from time")
+            return False
+        elif tevent_start_end[0] >= tselected_start_end[1]:
+            return False
+        else:
+            return True
+
+@app.route('/busy')
+def print_busy():
+
+    return render_template('index.html')
 
 def cal_sort_key( cal ):
     """
